@@ -29,6 +29,29 @@
       {"pos": "sink"},
       {"vacuum": 0},
       {"pos": "sink_up"}
+    ],
+    "s1_to_p1": [
+      {"vacuum": 0},
+      {"pos": "source1_up"},
+      {"pos": "source1"},
+      {"vacuum": 1},
+      {"pos": "source1_up"},
+      {"pos": "process1_up"},
+      {"pos": "process1"},
+      {"vacuum": 0},
+      {"pos": "process1_up"},
+      {"process": 1}
+    ],
+    "p1_to_sink": [
+      {"vacuum": 0},
+      {"pos": "process1_up"},
+      {"pos": "process1"},
+      {"vacuum": 1},
+      {"pos": "process1_up"},
+      {"pos": "sink_up"},
+      {"pos": "sink"},
+      {"vacuum": 0},
+      {"pos": "sink_up"}
     ]
   }
 }
