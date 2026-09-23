@@ -100,6 +100,10 @@ def run_sequence(config, name):
 def choose_sequence(state):
     if state[P1_SENSOR] == 1 and state[P1_RUNNING] == 0:
         return "p1_to_sink"
+    if state[P2_SENSOR] == 1 and state[P2_RUNNING] == 0 and state[P1_SENSOR] == 0:
+        return "p2_to_p1"
+    if state[SOURCE2] == 1 and state[P2_SENSOR] == 0:
+        return "s2_to_p2"
     if state[SOURCE1] == 1 and state[P1_SENSOR] == 0:
         return "s1_to_p1"
     return None
