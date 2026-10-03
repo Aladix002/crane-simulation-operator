@@ -7,30 +7,32 @@ from pathlib import Path
 
 from pymodbus.client import ModbusTcpClient
 
-HOST = "127.0.0.1"
-PORT = 5020
-CONFIG_FILE = Path(__file__).parent / "cell.json"
-LOG_FILE = Path(__file__).parent / "log.csv"
-MOVE_TIMEOUT = 15
-POLL_INTERVAL = 0.2
+GRADE = sys.argv[1].upper() if len(sys.argv) > 1 else "B"
 
-RESET, SET_X, SET_Y, VACUUM, START_P1, START_P2 = 0, 1, 2, 3, 4, 5
+HOST = "127.0.0.1"
+PORT = 502 if sys.platform.startswith("win") else 5020
+CONFIG_FILE = Path(__file__).parent / "crane.json"
+LOG_FILE = Path(__file__).parent / "log.csv"
+SAFE_Y = 200
+MOVE_TIMEOUT = 10
+
+SET_X, SET_Y, VACUUM, START_P1 = 1, 2, 3, 4
 AT_X, AT_Y, SOURCE1, SOURCE2 = 15, 16, 17, 18
 P1_RUNNING, P2_RUNNING, P1_SENSOR, P2_SENSOR = 19, 20, 21, 22
+WAIT_BEFORE_PICK = {
+    "source1": (SOURCE1, 1),
+    "source2": (SOURCE2, 1),
+    "process1": (P1_RUNNING, 0),
+    "process2": (P2_RUNNING, 0),
+}
 
 client = ModbusTcpClient(HOST, port=PORT)
-crane = {"x": 0, "y": 0, "part": None, "next_id": 1}
+crane = {"x": 0, "y": 0, "pos": None, "part": None, "next_id": 1}
 parts_at = {}
 
 
-def read_input(address):
-    result = client.read_holding_registers(address=address, count=1)
-    return result.registers[0]
-
-
-def read_state():
-    result = client.read_holding_registers(address=AT_X, count=10)
-    return dict(zip(range(AT_X, AT_X + 10), result.registers))
+def read_registers():
+    return client.read_holding_registers(address=0, count=25).registers
 
 
 def write_output(address, value):
@@ -41,28 +43,40 @@ def move_to(x, y):
     write_output(SET_X, x)
     write_output(SET_Y, y)
     deadline = time.time() + MOVE_TIMEOUT
-    while read_input(AT_X) != x or read_input(AT_Y) != y:
+    while read_registers()[AT_X:AT_Y + 1] != [x, y]:
         if time.time() > deadline:
-            raise RuntimeError(f"Crane did not reach X={x} Y={y}, check the event log")
+            raise RuntimeError(f"Crane did not reach X={x} Y={y}, check the event log for a collision")
         time.sleep(0.1)
     crane["x"], crane["y"] = x, y
-    if crane["part"] is not None:
+    if crane["part"]:
         log_position()
 
 
+def travel_to(x, y):
+    registers = read_registers()
+    if registers[AT_X] != x:
+        move_to(registers[AT_X], SAFE_Y)
+        move_to(x, SAFE_Y)
+    move_to(x, y)
+
+
+def wait_until(address, value):
+    while read_registers()[address] != value:
+        time.sleep(0.2)
+
+
 def pick_part():
-    part = parts_at.pop(crane["x"], None)
-    if part is None:
-        part = crane["next_id"]
+    if crane["x"] in parts_at:
+        crane["part"] = parts_at.pop(crane["x"])
+    else:
+        crane["part"] = crane["next_id"]
         crane["next_id"] += 1
-    crane["part"] = part
     log_position()
 
 
 def place_part():
-    if crane["part"] is not None:
-        parts_at[crane["x"]] = crane["part"]
-        crane["part"] = None
+    parts_at[crane["x"]] = crane["part"]
+    crane["part"] = None
 
 
 def start_log():
@@ -71,6 +85,8 @@ def start_log():
 
 
 def log_position():
+    if GRADE not in ("C", "B"):
+        return
     timestamp = datetime.now().isoformat(timespec="seconds")
     with open(LOG_FILE, "a", newline="") as f:
         csv.writer(f).writerow([crane["part"], timestamp, crane["x"], crane["y"], 1])
@@ -78,14 +94,16 @@ def log_position():
 
 def run_action(action, positions):
     if "pos" in action:
-        action = positions[action["pos"]]
-    if "setX" in action:
-        move_to(action["setX"], action["setY"])
+        crane["pos"] = action["pos"]
+        travel_to(positions[action["pos"]]["setX"], positions[action["pos"]]["setY"])
     if "vacuum" in action:
+        if action["vacuum"] == 1 and GRADE != "E" and crane["pos"] in WAIT_BEFORE_PICK:
+            address, value = WAIT_BEFORE_PICK[crane["pos"]]
+            wait_until(address, value)
         write_output(VACUUM, action["vacuum"])
         if action["vacuum"] == 1:
             pick_part()
-        else:
+        elif crane["part"]:
             place_part()
     if "process" in action:
         write_output(START_P1 + action["process"] - 1, 1)
@@ -93,31 +111,38 @@ def run_action(action, positions):
 
 def run_sequence(config, name):
     for action in config["sequences"][name]:
-        print(action)
         run_action(action, config["positions"])
 
 
-def choose_sequence(state):
+def choose_sequence(state, last_source):
     if state[P1_SENSOR] == 1 and state[P1_RUNNING] == 0:
         return "p1_to_sink"
+    source1_ready = state[SOURCE1] == 1 and state[P1_SENSOR] == 0
+    if GRADE != "B":
+        if source1_ready:
+            return "s1_to_p1"
+        return None
     if state[P2_SENSOR] == 1 and state[P2_RUNNING] == 0 and state[P1_SENSOR] == 0:
         return "p2_to_p1"
-    if state[SOURCE2] == 1 and state[P2_SENSOR] == 0:
-        return "s2_to_p2"
-    if state[SOURCE1] == 1 and state[P1_SENSOR] == 0:
+    source2_ready = state[SOURCE2] == 1 and state[P2_SENSOR] == 0
+    if source1_ready and (not source2_ready or last_source == "s2_to_p2"):
         return "s1_to_p1"
+    if source2_ready:
+        return "s2_to_p2"
     return None
 
 
 def run_auto(config):
-    print("Auto mode, waiting for parts (Ctrl+C to stop)")
+    last_source = None
     while True:
-        name = choose_sequence(read_state())
+        name = choose_sequence(read_registers(), last_source)
         if name:
-            print(f"-> {name}")
+            print(name)
             run_sequence(config, name)
+            if name in ("s1_to_p1", "s2_to_p2"):
+                last_source = name
         else:
-            time.sleep(POLL_INTERVAL)
+            time.sleep(0.2)
 
 
 def load_config():
@@ -126,14 +151,19 @@ def load_config():
 
 
 def main():
+    if GRADE not in ("E", "D", "C", "B"):
+        print("Use: python controller.py E|D|C|B")
+        return
     config = load_config()
-    start_log()
+    if GRADE in ("C", "B"):
+        start_log()
     if not client.connect():
         print(f"Could not connect to the simulation on {HOST}:{PORT}")
         return
+    print(f"Grade {GRADE}")
     try:
-        if len(sys.argv) > 1:
-            run_sequence(config, sys.argv[1])
+        if GRADE == "E":
+            run_sequence(config, "s1_to_p1_to_sink")
         else:
             run_auto(config)
     except KeyboardInterrupt:
