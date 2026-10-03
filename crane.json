@@ -7,7 +7,7 @@
     "sink": {"setX": 945, "setY": 82}
   },
   "sequences": {
-    "s1_to_p1_to_sink": [{"pos": "source1"}, {"vacuum": 1}, {"pos": "process1"}, {"vacuum": 0}, {"vacuum": 1}, {"pos": "sink"}, {"vacuum": 0}],
+    "s1_to_p1_to_sink": [{"pos": "source1"}, {"vacuum": 1}, {"pos": "process1"}, {"vacuum": 0}, {"process": 1}, {"vacuum": 1}, {"pos": "sink"}, {"vacuum": 0}],
     "s1_to_p1": [{"pos": "source1"}, {"vacuum": 1}, {"pos": "process1"}, {"vacuum": 0}, {"process": 1}],
     "p1_to_sink": [{"pos": "process1"}, {"vacuum": 1}, {"pos": "sink"}, {"vacuum": 0}],
     "s2_to_p2": [{"pos": "source2"}, {"vacuum": 1}, {"pos": "process2"}, {"vacuum": 0}, {"process": 2}],

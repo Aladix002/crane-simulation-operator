@@ -85,7 +85,7 @@ def start_log():
 
 
 def log_position():
-    if GRADE not in ("C", "B"):
+    if GRADE not in ("C", "B", "A"):
         return
     timestamp = datetime.now().isoformat(timespec="seconds")
     with open(LOG_FILE, "a", newline="") as f:
@@ -97,7 +97,7 @@ def run_action(action, positions):
         crane["pos"] = action["pos"]
         travel_to(positions[action["pos"]]["setX"], positions[action["pos"]]["setY"])
     if "vacuum" in action:
-        if action["vacuum"] == 1 and GRADE != "E" and crane["pos"] in WAIT_BEFORE_PICK:
+        if action["vacuum"] == 1 and crane["pos"] in WAIT_BEFORE_PICK:
             address, value = WAIT_BEFORE_PICK[crane["pos"]]
             wait_until(address, value)
         write_output(VACUUM, action["vacuum"])
@@ -118,7 +118,7 @@ def choose_sequence(state, last_source):
     if state[P1_SENSOR] == 1 and state[P1_RUNNING] == 0:
         return "p1_to_sink"
     source1_ready = state[SOURCE1] == 1 and state[P1_SENSOR] == 0
-    if GRADE != "B":
+    if GRADE not in ("B", "A"):
         if source1_ready:
             return "s1_to_p1"
         return None
@@ -151,8 +151,11 @@ def load_config():
 
 
 def main():
-    if GRADE not in ("E", "D", "C", "B"):
-        print("Use: python controller.py E|D|C|B")
+    if GRADE not in ("E", "D", "C", "B", "A"):
+        print("Use: python controller.py E|D|C|B|A")
+        return
+    if GRADE == "A":
+        import hmi
         return
     config = load_config()
     if GRADE in ("C", "B"):
