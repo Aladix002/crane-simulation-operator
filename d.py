@@ -1,34 +1,25 @@
-import csv
 import json
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 from pymodbus.client import ModbusTcpClient
 
-GRADE = sys.argv[1].upper() if len(sys.argv) > 1 else "B"
-
 HOST = "127.0.0.1"
 PORT = 502 if sys.platform.startswith("win") else 5020
 CONFIG_FILE = Path(__file__).parent / "crane.json"
-LOG_FILE = Path(__file__).parent / "log.csv"
 SAFE_Y = 200
 MOVE_TIMEOUT = 10
 
 SET_X, SET_Y, VACUUM, START_P1 = 1, 2, 3, 4
-AT_X, AT_Y, SOURCE1, SOURCE2 = 15, 16, 17, 18
-P1_RUNNING, P2_RUNNING, P1_SENSOR, P2_SENSOR = 19, 20, 21, 22
+AT_X, AT_Y, SOURCE1, P1_RUNNING, P1_SENSOR = 15, 16, 17, 19, 21
 WAIT_BEFORE_PICK = {
     "source1": (SOURCE1, 1),
-    "source2": (SOURCE2, 1),
     "process1": (P1_RUNNING, 0),
-    "process2": (P2_RUNNING, 0),
 }
 
 client = ModbusTcpClient(HOST, port=PORT)
-crane = {"x": 0, "y": 0, "pos": None, "part": None, "next_id": 1}
-parts_at = {}
+crane = {"pos": None}
 
 
 def read_registers():
@@ -47,9 +38,6 @@ def move_to(x, y):
         if time.time() > deadline:
             raise RuntimeError(f"Crane did not reach X={x} Y={y}, check the event log for a collision")
         time.sleep(0.1)
-    crane["x"], crane["y"] = x, y
-    if crane["part"]:
-        log_position()
 
 
 def travel_to(x, y):
@@ -65,33 +53,6 @@ def wait_until(address, value):
         time.sleep(0.2)
 
 
-def pick_part():
-    if crane["x"] in parts_at:
-        crane["part"] = parts_at.pop(crane["x"])
-    else:
-        crane["part"] = crane["next_id"]
-        crane["next_id"] += 1
-    log_position()
-
-
-def place_part():
-    parts_at[crane["x"]] = crane["part"]
-    crane["part"] = None
-
-
-def start_log():
-    with open(LOG_FILE, "w", newline="") as f:
-        csv.writer(f).writerow(["product_id", "timestamp", "x", "y", "vacuum"])
-
-
-def log_position():
-    if GRADE not in ("C", "B", "A"):
-        return
-    timestamp = datetime.now().isoformat(timespec="seconds")
-    with open(LOG_FILE, "a", newline="") as f:
-        csv.writer(f).writerow([crane["part"], timestamp, crane["x"], crane["y"], 1])
-
-
 def run_action(action, positions):
     if "pos" in action:
         crane["pos"] = action["pos"]
@@ -101,10 +62,6 @@ def run_action(action, positions):
             address, value = WAIT_BEFORE_PICK[crane["pos"]]
             wait_until(address, value)
         write_output(VACUUM, action["vacuum"])
-        if action["vacuum"] == 1:
-            pick_part()
-        elif crane["part"]:
-            place_part()
     if "process" in action:
         write_output(START_P1 + action["process"] - 1, 1)
 
@@ -114,61 +71,36 @@ def run_sequence(config, name):
         run_action(action, config["positions"])
 
 
-def choose_sequence(state, last_source):
-    if state[P1_SENSOR] == 1 and state[P1_RUNNING] == 0:
-        return "p1_to_sink"
-    source1_ready = state[SOURCE1] == 1 and state[P1_SENSOR] == 0
-    if GRADE not in ("B", "A"):
-        if source1_ready:
-            return "s1_to_p1"
-        return None
-    if state[P2_SENSOR] == 1 and state[P2_RUNNING] == 0 and state[P1_SENSOR] == 0:
-        return "p2_to_p1"
-    source2_ready = state[SOURCE2] == 1 and state[P2_SENSOR] == 0
-    if source1_ready and (not source2_ready or last_source == "s2_to_p2"):
-        return "s1_to_p1"
-    if source2_ready:
-        return "s2_to_p2"
-    return None
-
-
-def run_auto(config):
-    last_source = None
-    while True:
-        name = choose_sequence(read_registers(), last_source)
-        if name:
-            print(name)
-            run_sequence(config, name)
-            if name in ("s1_to_p1", "s2_to_p2"):
-                last_source = name
-        else:
-            time.sleep(0.2)
-
-
 def load_config():
     with open(CONFIG_FILE) as f:
         return json.load(f)
 
 
+def choose_sequence(state):
+    if state[P1_SENSOR] == 1 and state[P1_RUNNING] == 0:
+        return "p1_to_sink"
+    if state[SOURCE1] == 1 and state[P1_SENSOR] == 0:
+        return "s1_to_p1"
+    return None
+
+
+def run_auto(config):
+    while True:
+        name = choose_sequence(read_registers())
+        if name:
+            print(name)
+            run_sequence(config, name)
+        else:
+            time.sleep(0.2)
+
+
 def main():
-    if GRADE not in ("E", "D", "C", "B", "A"):
-        print("Use: python controller.py E|D|C|B|A")
-        return
-    if GRADE == "A":
-        import hmi
-        return
     config = load_config()
-    if GRADE in ("C", "B"):
-        start_log()
     if not client.connect():
         print(f"Could not connect to the simulation on {HOST}:{PORT}")
         return
-    print(f"Grade {GRADE}")
     try:
-        if GRADE == "E":
-            run_sequence(config, "s1_to_p1_to_sink")
-        else:
-            run_auto(config)
+        run_auto(config)
     except KeyboardInterrupt:
         print("Stopped")
     finally:
