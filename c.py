@@ -1,6 +1,5 @@
 import csv
 import json
-import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -8,11 +7,10 @@ from pathlib import Path
 from pymodbus.client import ModbusTcpClient
 
 HOST = "127.0.0.1"
-PORT = 502 if sys.platform.startswith("win") else 5020
+PORT = 5020
 CONFIG_FILE = Path(__file__).parent / "crane.json"
 LOG_FILE = Path(__file__).parent / "log.csv"
-SAFE_Y = 200
-MOVE_TIMEOUT = 10
+SAFE_Y = 150
 
 SET_X, SET_Y, VACUUM, START_P1 = 1, 2, 3, 4
 AT_X, AT_Y, SOURCE1, P1_RUNNING, P1_SENSOR = 15, 16, 17, 19, 21
@@ -37,10 +35,7 @@ def write_output(address, value):
 def move_to(x, y):
     write_output(SET_X, x)
     write_output(SET_Y, y)
-    deadline = time.time() + MOVE_TIMEOUT
     while read_registers()[AT_X:AT_Y + 1] != [x, y]:
-        if time.time() > deadline:
-            raise RuntimeError(f"Crane did not reach X={x} Y={y}, check the event log for a collision")
         time.sleep(0.1)
     crane["x"], crane["y"] = x, y
     if crane["part"]:
