@@ -4,8 +4,6 @@ from pathlib import Path
 
 from pymodbus.client import ModbusTcpClient
 
-HOST = "127.0.0.1"
-PORT = 5020
 CONFIG_FILE = Path(__file__).parent / "crane.json"
 SAFE_Y = 150
 
@@ -16,8 +14,8 @@ WAIT_BEFORE_PICK = {
     "process1": (P1_RUNNING, 0),
 }
 
-client = ModbusTcpClient(HOST, port=PORT)
-crane = {"pos": None}
+client = ModbusTcpClient("127.0.0.1", port=5020)
+crane = {"position": None}
 
 
 def read_registers():
@@ -29,70 +27,56 @@ def write_output(address, value):
 
 
 def move_to(x, y):
-    write_output(SET_X, x)
-    write_output(SET_Y, y)
-    while read_registers()[AT_X:AT_Y + 1] != [x, y]:
-        time.sleep(0.1)
-
-
-def travel_to(x, y):
-    registers = read_registers()
-    if registers[AT_X] != x:
-        move_to(registers[AT_X], SAFE_Y)
-        move_to(x, SAFE_Y)
-    move_to(x, y)
-
-
-def wait_until(address, value):
-    while read_registers()[address] != value:
-        time.sleep(0.2)
+    current_x = read_registers()[AT_X]
+    if current_x == x:
+        points = [(x, y)]
+    else:
+        points = [(current_x, SAFE_Y), (x, SAFE_Y), (x, y)]
+    for point_x, point_y in points:
+        write_output(SET_X, point_x)
+        write_output(SET_Y, point_y)
+        while read_registers()[AT_X:AT_Y + 1] != [point_x, point_y]:
+            time.sleep(0.1)
 
 
 def run_action(action, positions):
-    if "pos" in action:
-        crane["pos"] = action["pos"]
-        travel_to(positions[action["pos"]]["setX"], positions[action["pos"]]["setY"])
+    if "position" in action:
+        crane["position"] = action["position"]
+        move_to(positions[action["position"]]["setX"], positions[action["position"]]["setY"])
     if "vacuum" in action:
-        if action["vacuum"] == 1 and crane["pos"] in WAIT_BEFORE_PICK:
-            address, value = WAIT_BEFORE_PICK[crane["pos"]]
-            wait_until(address, value)
+        if action["vacuum"] == 1 and crane["position"] in WAIT_BEFORE_PICK:
+            address, value = WAIT_BEFORE_PICK[crane["position"]]
+            while read_registers()[address] != value:
+                time.sleep(0.2)
         write_output(VACUUM, action["vacuum"])
     if "process" in action:
         write_output(START_P1 + action["process"] - 1, 1)
 
 
-def run_sequence(config, name):
-    for action in config["sequences"][name]:
-        run_action(action, config["positions"])
-
-
-def load_config():
-    with open(CONFIG_FILE) as f:
-        return json.load(f)
-
-
-def choose_sequence(state):
-    if state[P1_SENSOR] == 1 and state[P1_RUNNING] == 0:
+def choose_sequence(registers):
+    if registers[P1_SENSOR] == 1 and registers[P1_RUNNING] == 0:
         return "p1_to_sink"
-    if state[SOURCE1] == 1 and state[P1_SENSOR] == 0:
+    if registers[SOURCE1] == 1 and registers[P1_SENSOR] == 0:
         return "s1_to_p1"
     return None
 
 
 def run_auto(config):
     while True:
-        name = choose_sequence(read_registers())
-        if name:
-            print(name)
-            run_sequence(config, name)
+        sequence_name = choose_sequence(read_registers())
+        if sequence_name:
+            print(sequence_name)
+            for action in config["sequences"][sequence_name]:
+                run_action(action, config["positions"])
         else:
             time.sleep(0.2)
 
 
 def main():
-    config = load_config()
+    with open(CONFIG_FILE) as f:
+        config = json.load(f)
     if not client.connect():
-        print(f"Could not connect to the simulation on {HOST}:{PORT}")
+        print("Could not connect to the simulation on 127.0.0.1:5020")
         return
     try:
         run_auto(config)
