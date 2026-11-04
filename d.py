@@ -9,13 +9,8 @@ SAFE_Y = 150
 
 SET_X, SET_Y, VACUUM, START_P1 = 1, 2, 3, 4
 AT_X, AT_Y, SOURCE1, P1_RUNNING, P1_SENSOR = 15, 16, 17, 19, 21
-WAIT_BEFORE_PICK = {
-    "source1": (SOURCE1, 1),
-    "process1": (P1_RUNNING, 0),
-}
 
 client = ModbusTcpClient("127.0.0.1", port=5020)
-crane = {"position": None}
 
 
 def read_registers():
@@ -41,13 +36,8 @@ def move_to(x, y):
 
 def run_action(action, positions):
     if "position" in action:
-        crane["position"] = action["position"]
         move_to(positions[action["position"]]["setX"], positions[action["position"]]["setY"])
     if "vacuum" in action:
-        if action["vacuum"] == 1 and crane["position"] in WAIT_BEFORE_PICK:
-            address, value = WAIT_BEFORE_PICK[crane["position"]]
-            while read_registers()[address] != value:
-                time.sleep(0.2)
         write_output(VACUUM, action["vacuum"])
     if "process" in action:
         write_output(START_P1 + action["process"] - 1, 1)
